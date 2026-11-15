@@ -3,10 +3,13 @@
 # Повторяет официальную сборку (.github/actions/docker-build-and-test):
 # сборке нужна живая база, поэтому BuildKit работает в сети контейнера
 # database. Отличия: образ уходит в GHCR владельца форка, а не на Docker Hub,
-# и сразу собирается с нашим адресом — подмена адреса при запуске не нужна.
+# и в него вшиты наши ссылки на условия и политику и название Royalty Teams
+# (NEXT_PUBLIC_* попадают в код при сборке, поменять их можно только пересборкой).
+# Адрес сайта подставляет start.sh при запуске.
+# NEXT_PUBLIC_WEBSITE_URL не задавать: от него строятся ссылки на запись (CAL_URL).
 #
-# Обновление сервера: Actions → «RT · образ для сервера» → Run workflow,
-# затем на сервере: cd /opt/calcom && docker compose pull && docker compose up -d
+# Обновление сервера: Sync fork → Actions → «RT · образ для сервера» → Run workflow,
+# затем на limeet: cd /opt/calcom && ./backup.sh && docker compose pull && docker compose up -d && docker image prune -f
 name: "RT · образ для сервера"
 
 on:
@@ -38,6 +41,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+
+      - name: Название Royalty Teams в Dockerfile
+        # Штатный Dockerfile не принимает NEXT_PUBLIC_APP_NAME и NEXT_PUBLIC_COMPANY_NAME.
+        # Дописываем их ARG здесь, а не в файле форка, чтобы «Sync fork» не давал конфликтов.
+        # ARG виден шагам RUN как переменная окружения — next build его подхватит.
+        run: |
+          sed -i 's/^ARG NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL$/&\nARG NEXT_PUBLIC_APP_NAME\nARG NEXT_PUBLIC_COMPANY_NAME/' Dockerfile
+          grep -qx 'ARG NEXT_PUBLIC_APP_NAME' Dockerfile || { echo "::error::В Dockerfile нет строки ARG NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL — апстрим поменял файл, поправь этот шаг"; exit 1; }
+          grep -n '^ARG NEXT_PUBLIC' Dockerfile
 
       - name: База для сборки
         run: |
@@ -79,6 +91,10 @@ jobs:
             NEXT_PUBLIC_WEBAPP_URL=https://cal.royalty-teams.ru
             NEXT_PUBLIC_API_V2_URL=http://localhost:5555/api/v2
             NEXT_PUBLIC_LICENSE_CONSENT=agree
+            NEXT_PUBLIC_WEBSITE_TERMS_URL=https://royalty-teams.ru/terms-conditions
+            NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL=https://royalty-teams.ru/privacy-policy
+            NEXT_PUBLIC_APP_NAME=Royalty Teams
+            NEXT_PUBLIC_COMPANY_NAME=Royalty Teams
             CALCOM_TELEMETRY_DISABLED=1
             DATABASE_URL=postgresql://unicorn_user:magical_password@database:5432/calendso
             DATABASE_DIRECT_URL=postgresql://unicorn_user:magical_password@database:5432/calendso
