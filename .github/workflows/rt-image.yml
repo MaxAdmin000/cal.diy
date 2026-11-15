@@ -1,0 +1,87 @@
+# Образ Cal.diy для сервера Royalty Teams (limeet, cal.royalty-teams.ru).
+#
+# Повторяет официальную сборку (.github/actions/docker-build-and-test):
+# сборке нужна живая база, поэтому BuildKit работает в сети контейнера
+# database. Отличия: образ уходит в GHCR владельца форка, а не на Docker Hub,
+# и сразу собирается с нашим адресом — подмена адреса при запуске не нужна.
+#
+# Обновление сервера: Actions → «RT · образ для сервера» → Run workflow,
+# затем на сервере: cd /opt/calcom && docker compose pull && docker compose up -d
+name: "RT · образ для сервера"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Что собирать: ветка, тег или коммит"
+        default: "main"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: rt-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Место на раннере
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: База для сборки
+        run: |
+          grep -o '^[^#]*' .env.example > .env
+          docker compose up -d database
+          docker compose ps database
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=container:database
+          buildkitd-flags: |
+            --allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Имя и метка образа
+        id: meta
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${owner}/cal.diy" >> "$GITHUB_OUTPUT"
+          echo "tag=$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Сборка и отправка
+        uses: docker/build-push-action@v6
+        with:
+          context: ./
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          build-args: |
+            NEXT_PUBLIC_WEBAPP_URL=https://cal.royalty-teams.ru
+            NEXT_PUBLIC_API_V2_URL=http://localhost:5555/api/v2
+            NEXT_PUBLIC_LICENSE_CONSENT=agree
+            CALCOM_TELEMETRY_DISABLED=1
+            DATABASE_URL=postgresql://unicorn_user:magical_password@database:5432/calendso
+            DATABASE_DIRECT_URL=postgresql://unicorn_user:magical_password@database:5432/calendso
+
+      - name: Итог
+        run: echo "Готово ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }} и :latest"
